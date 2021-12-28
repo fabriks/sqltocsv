@@ -17,19 +17,19 @@ import (
 // WriteFile will write a CSV file to the file name specified (with headers)
 // based on whatever is in the sql.Rows you pass in. It calls WriteCsvToWriter under
 // the hood.
-func WriteFile(csvFileName string, rows *sql.Rows) error {
+func WriteFile(csvFileName string, rows *sql.Rows) (int, error) {
 	return New(rows).WriteFile(csvFileName)
 }
 
 // WriteString will return a string of the CSV. Don't use this unless you've
 // got a small data set or a lot of memory
-func WriteString(rows *sql.Rows) (string, error) {
+func WriteString(rows *sql.Rows) (int, string, error) {
 	return New(rows).WriteString()
 }
 
 // Write will write a CSV file to the writer passed in (with headers)
 // based on whatever is in the sql.Rows you pass in.
-func Write(writer io.Writer, rows *sql.Rows) error {
+func Write(writer io.Writer, rows *sql.Rows) (int, error) {
 	return New(rows).Write(writer)
 }
 
@@ -62,7 +62,7 @@ func (c *Converter) SetRowPreProcessor(processor CsvPreProcessorFunc) {
 
 // String returns the CSV as a string in an fmt package friendly way
 func (c Converter) String() string {
-	csv, err := c.WriteString()
+	_, csv, err := c.WriteString()
 	if err != nil {
 		return ""
 	}
@@ -70,30 +70,30 @@ func (c Converter) String() string {
 }
 
 // WriteString returns the CSV as a string and an error if something goes wrong
-func (c Converter) WriteString() (string, error) {
+func (c Converter) WriteString() (int, string, error) {
 	buffer := bytes.Buffer{}
-	err := c.Write(&buffer)
-	return buffer.String(), err
+	rowCount, err := c.Write(&buffer)
+	return rowCount, buffer.String(), err
 }
 
 // WriteFile writes the CSV to the filename specified, return an error if problem
-func (c Converter) WriteFile(csvFileName string) error {
+func (c Converter) WriteFile(csvFileName string) (int, error) {
 	f, err := os.Create(csvFileName)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	err = c.Write(f)
+	rowCount, err := c.Write(f)
 	if err != nil {
 		f.Close() // close, but only return/handle the write error
-		return err
+		return rowCount, err
 	}
 
-	return f.Close()
+	return rowCount, f.Close()
 }
 
 // Write writes the CSV to the Writer provided
-func (c Converter) Write(writer io.Writer) error {
+func (c Converter) Write(writer io.Writer) (int, error) {
 	rows := c.rows
 	csvWriter := csv.NewWriter(writer)
 	if c.Delimiter != '\x00' {
@@ -102,7 +102,7 @@ func (c Converter) Write(writer io.Writer) error {
 
 	columnNames, err := rows.Columns()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if c.WriteHeaders {
@@ -116,13 +116,15 @@ func (c Converter) Write(writer io.Writer) error {
 		}
 		err = csvWriter.Write(headers)
 		if err != nil {
-			return fmt.Errorf("failed to write headers: %w", err)
+			return 0, fmt.Errorf("failed to write headers: %w", err)
 		}
 	}
 
 	count := len(columnNames)
 	values := make([]interface{}, count)
 	valuePtrs := make([]interface{}, count)
+
+	rowCount := 0
 
 	for rows.Next() {
 		row := make([]string, count)
@@ -132,7 +134,7 @@ func (c Converter) Write(writer io.Writer) error {
 		}
 
 		if err = rows.Scan(valuePtrs...); err != nil {
-			return err
+			return rowCount, err
 		}
 
 		for i, _ := range columnNames {
@@ -175,15 +177,17 @@ func (c Converter) Write(writer io.Writer) error {
 		if writeRow {
 			err = csvWriter.Write(row)
 			if err != nil {
-				return fmt.Errorf("failed to write data row to csv %w", err)
+				return rowCount, fmt.Errorf("failed to write data row to csv %w", err)
 			}
 		}
+
+		rowCount++
 	}
 	err = rows.Err()
 
 	csvWriter.Flush()
 
-	return err
+	return rowCount, err
 }
 
 // New will return a Converter which will write your CSV however you like
